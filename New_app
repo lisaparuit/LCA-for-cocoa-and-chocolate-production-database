@@ -1,0 +1,451 @@
+import sqlite3 as sql
+import pandas as pd
+import tkinter as tk
+import tkinter.messagebox as tkmb
+from tkinter import simpledialog
+from tkinter import ttk
+
+
+#############################
+##### CREATE FUNCTIONS ######
+#############################
+
+class DataBase(object):
+    """ Database containing the informations """
+
+    def __init__(self):
+        """ Opens the database"""
+        # Open the database
+        self.connection = sql.connect("ProjectUB.db")
+        self.cursor = self.connection.cursor()
+        # Confirmation
+        if self.connection and self.cursor:
+            tkmb.showinfo("Info",'You are connected to the database')
+    
+    def close(self) :
+        """ Closes the database"""
+        # Close the database
+        self.cursor.close()
+        self.connection.close()
+        # Confirmation
+        tkmb.showinfo("Info","You are disconnected from the database")
+    
+
+    ##### DATABASE INTERACTIVE DISPLAY #####
+
+    def list_tables(self):
+        """ Returns a list containing the name of the tables in the database"""
+        # List the tables
+        request = "SELECT name FROM sqlite_master WHERE type='table';"
+        self.cursor.execute(request)
+        tables = []
+        for name in self.cursor.fetchall():
+            # Do not consider sqlite sequence
+            if name[0] != "sqlite_sequence":
+                tables.append(name[0])
+        return tables
+
+
+    def interactive_structure(self, window):
+        """Shows the structure of the database on the menu page. 
+        Titles are buttons that can be clicked on to visualize (& edit ?) tables."""
+        # Creates a main frame to hold the graph
+        Main_frame = tk.Frame(window, borderwidth=2, relief=tk.GROOVE)
+        Main_frame.pack(expand=True, fill=tk.BOTH)
+
+        # Initial position for the first frame
+        x_position = 20
+        y_position = 20
+
+        tables = self.list_tables()
+        if "Supply_Chains" in tables:
+            tables.remove("Supply_Chains")
+
+        # Create a frame for Supply_Chains table
+        table_frame = tk.Frame(Main_frame, borderwidth=2, relief=tk.GROOVE)
+        x_position, y_position = 350, 50
+        table_frame.place(x=x_position, y=y_position, anchor="n")
+
+        # Button with the name of the table
+        tab = Table("Supply_Chains", self)
+        display_button = tk.Button(table_frame, text=tab.name, command=tab.display_dataframe)
+        display_button.pack(side= tk.TOP, padx=5, pady=5)
+
+        # Displaying the columns
+        request = "PRAGMA table_info(Supply_Chains)"
+        self.cursor.execute(request)
+        for column in self.cursor.fetchall():  # Show the column's name
+            tk.Label(table_frame, text=column[1]).pack()
+
+        frame_width = 0
+        for table in tables:
+            # Create a frame for each table
+            table_frame = tk.Frame(Main_frame, borderwidth=2, relief=tk.GROOVE)
+            x_position, y_position = 100 + frame_width , 300
+            table_frame.place(x=x_position, y=y_position)
+
+            # Button with the name of the table
+            tab = Table(table, self)
+            display_button = tk.Button(table_frame, text=tab.name, command=tab.display_dataframe)
+            display_button.pack(side= tk.TOP, padx=5, pady=5)
+
+            # Displaying the columns
+            request = "PRAGMA table_info(" + table + ")"
+            self.cursor.execute(request)
+            for column in self.cursor.fetchall():  # Show the column's name
+                tk.Label(table_frame, text=column[1]).pack()
+            
+            # Adjust position for each frame to prevent overlap
+            window.update_idletasks()  # Force the window to update
+            frame_width += (table_frame.winfo_width() +20) # get frame width
+        
+    
+
+    ###### TABLE MANAGEMENT ######
+
+    def create_table(self, tab_name, column_names, column_types):
+        """ Creates a table in the database"""
+        # Create the string for SQL request
+        columns = ", ".join(f"{name} {type}" for name, type in zip(column_names, column_types))
+        # Create the table
+        request = f"CREATE TABLE IF NOT EXISTS {tab_name.get()} ({columns})"
+        self.cursor.execute(request)
+        # Confirmation
+        tkmb.showinfo("Info", "The table is created")
+
+
+    def delete_table(self, name):
+        """ Deletes a table named as input in the database"""
+        request = "DROP TABLE IF EXISTS " + name
+        self.cursor.execute(request)
+        # Confirmation
+        tkmb.showinfo("Info","The table is deleted")
+
+
+    ###### ADD DATA #####
+
+    def add_data(self):
+        """ Adds data to the database"""
+        new_window = create_new_window("Add data")
+
+        # 1. Add the reference of the data
+        Sources = Table("Sources", self)
+        tk.Label(new_window, text="Add the source of your data:").pack()
+        # Find the last StudyID
+        LSID = Sources.df["StudyID"].max() + 1
+        print(LSID)
+        # Prompt the data
+        Dict_sources = Sources.ask_row(new_window, StudyID=LSID)
+        print(Dict_sources)
+        # Add the data to the table
+        Sources.add_row(Dict_sources)
+
+    
+
+        # 2. Add the supply chain associated to the study
+        Supply_Chains = Table("Supply_Chains", self)
+        tk.Label(new_window, text="Add the supply chain associated to the study:").pack()
+        # Prompt the data
+        Dict_supply_chains = Supply_Chains.ask_row(new_window, StudyID=Dict_sources["StudyID"])
+        # Add the data to the table
+        Supply_Chains.add_row(Dict_supply_chains)
+
+        # 3. If SpplyChainType not in the Description table, it needs to be added
+        Description = Table("Description", self)
+        if Dict_supply_chains["SupplyChainType"] not in Description.return_list_of_values_in_column("SupplyChainType"):
+            tk.Label(new_window, text="Add the description of the supply chain type:").pack()
+            # Prompt the data
+            Dict_description = Description.ask_row(new_window, SupplyChainType=Dict_supply_chains["SupplyChainType"])
+            # Add the data to the table
+            Description.add_row(Dict_description)
+        
+        # 4. Add the environmental impact of the supply chain
+        Env = Table("Environmental_assessment", self)
+        label = tk.Label(new_window, text="Do you wan to add Environmental assessment values ?")
+        label.pack()
+        value_radio = tk.StringVar() 
+        bouton1 = tk.Radiobutton(new_window, text="Yes", variable=value_radio, value='y')
+        bouton2 = tk.Radiobutton(new_window, text="No", variable=value_radio, value='n')
+        bouton1.select()
+        bouton1.pack()
+        bouton2.pack()
+
+        if value_radio.get() == 'y':
+            tk.Label(new_window, text="Add the values of the environmental assessment:").pack()
+            # Prompt the data
+            Dict_env = Env.ask_row(new_window, SupplyChainID=Dict_supply_chains["SupplyChainID"])
+            # Add the data to the table
+            Env.add_row(Dict_env)
+
+
+
+
+class Table(object):
+    """ Pandas dataframe containing the informations from the SQL table in the database. 
+    When manipulationg Table object, one should only use the attribute df and pandas methods.
+    The database is modified using the method save."""
+    
+    def __init__(self, name, database, df = None):
+        """ Creates an object that can interfere with the table in the database and be treated ad a pandas dataframe unsing its attribute df"""
+        self.name = name
+        self.database = database
+        self.df = pd.read_sql('SELECT * FROM ' + self.name, self.database.connection)
+        if self.name not in self.database.list_tables():
+           tkmb.showinfo("Info","The table does not exist. Please create the table.")
+
+    def save(self):
+        """ Modifies the database with the values of its attribute df """
+        self.df.to_sql(self.name, self.database.connection, if_exists='replace', index=False)
+        # Confirmation
+        tkmb.showinfo("Info","The table has been modified")
+    
+
+    ###### DISPLAY DATAFRAME PAGE #####
+
+    def display_dataframe(self):
+        """ Displays the dataframe in a new window 
+        The user can edit the dataframe by double clicking on the label he wants to edit.
+        Save button to save changes instead of Edit 
+        """
+        # Create a new window
+        new_window = create_new_window("Display table")
+        new_window.geometry("1000x600")
+
+        # Define the Treeview
+        tree = ttk.Treeview(new_window)
+        
+        # Define the column names
+        tree["columns"] = self.df.columns.tolist()
+        
+        # Format our columns
+        for column in self.df.columns:
+            tree.column(column, anchor="w")
+            tree.heading(column, text=column, anchor='w')
+
+        # Inserting the DataFrame rows in Treeview
+        for index, row in self.df.iterrows():
+            print(self.name, row.tolist())
+            tree.insert("", tk.END, values=row.tolist())
+        tree.pack(expand=True, fill='both')
+
+        # Create scrollbars
+        v_scrollbar = tk.Scrollbar(new_window, orient=tk.VERTICAL, command=tree.yview)
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        h_scrollbar = tk.Scrollbar(new_window, orient=tk.HORIZONTAL, command=tree.xview)
+        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # Configure the treeview to use the scrollbars
+        tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+
+        # Pack the treeview last so it gets the remaining space
+        tree.pack(side="left", fill="both", expand=True)
+
+        # Bind the double-click event
+        tree.bind("<Double-1>", on_label_double_click)
+        
+        # Exit & Save button
+        tk.Button(new_window, text="Close", command=new_window.destroy).place(x=450, y=560, anchor="center")
+        tk.Button(new_window, text="Save", command=lambda: [self.save]).place(x=550, y=560, anchor="center")
+
+    
+    ###### ADD DATA #####
+
+    def ask_row(self, new_window, StudyID = None, SupplyChainID = None, SupplyChainType = None):
+        """In an input window, creates the entry form for new_row creation in the table
+        and return a dictionary in order to modify the dataframe through add_row()
+        """
+        # Getting the column names for the table
+        request = "PRAGMA table_info("+self.name+")"
+        self.database.cursor.execute(request)
+        Dict = {}
+        for column in self.database.cursor.fetchall():  # Show the column's name
+            # if the column is a fixed primary key, it is not asked to the user
+            if column[1] == "StudyID" and StudyID is not None: 
+                Dict.update({column[1] : StudyID})
+            elif column[1] == "SupplyChainID" and SupplyChainID is not None:
+                Dict.update({column[1] : SupplyChainID})
+            elif column[1] == "SupplyChainType" and SupplyChainType is not None:
+                Dict.update({column[1] : SupplyChainType})
+            # else the column is asked to the user
+            else:
+                Dict.update({column[1] : tk.StringVar()})
+        
+        # Entry form only for the columns that are not fixed primary keys
+        keys_with_stringvar_values = return_keys_with_stringvar_values_as_list(Dict)              
+        for var in keys_with_stringvar_values:
+            tk.Label(new_window,text=var).pack()
+            tk.Entry(new_window, textvariable = Dict[var], width=100).pack()
+        
+        # Confirm variables entry
+        tk.Button(new_window, text="Confirm", command=new_window.destroy).pack()
+        new_window.wait_window()
+
+        return(Dict)
+
+
+    def add_row(self, row):
+        """ Adds a row to the table the row must be in the form of a dictionary with the column 
+        names as keys and the values as values."""
+        self.df = self.df._append(row, ignore_index=True)
+        self.save()
+        # Confirmation 
+        tkmb.showinfo("Info","The row has been added to the table")
+
+
+    
+    ######## REQUESTS ########
+
+    def return_list_of_values_in_column(self, column_name):
+        """ Returns a list of the values in the column"""
+        return pd.unique(self.df[column_name]).to_list()
+
+
+
+### Functions that are used in the code but are not part of the classes:
+
+def create_new_window(title):
+    """ Creates a new window with a title"""
+    new_window = tk.Toplevel(window)
+    new_window.title(title)
+    return new_window
+
+def on_label_double_click(event):
+    # Prompt the user for new text
+    new_text = simpledialog.askstring("Input", "Enter new text:", parent=event.widget.master)
+    if new_text is not None:  # Check if the user clicked 'Cancel'
+        event.widget.config(text=new_text)
+
+def return_keys_with_stringvar_values_as_list(dictionary):
+    list_keys = []
+    for key, value in dictionary.items():
+        if isinstance(value, tk.StringVar):
+            list_keys.append(key)
+    return list_keys
+
+### Old functions that may now be useless:
+
+def create_table_command():
+    """ Creates a table in the database"""
+    # Prompt the name of the table
+    new_window = create_new_window("Create table 1/3")
+    tk.Label(new_window, text="Table name:").pack()
+    tab_name = tk.StringVar()
+    tk.Entry(new_window, textvariable=tab_name, width=30).pack()
+    tk.Label(new_window, text="Press Enter to confirm").pack()
+    
+    if tab_name.get() == "":
+        tkmb.showinfo("Info","Please enter a name for the table")
+    elif tab_name.get() in self.list_tables():
+        tkmb.showinfo("Info","The table already exists")
+
+    new_window.bind('<Return>', lambda e: new_window.destroy())
+
+    # Wait for the user to input the table name
+    new_window.wait_window()
+
+    # Prompt the columns
+    column_names, column_types = [], []
+    loop = True
+
+    while loop:
+        new_window = create_new_window("Create table 2/3")
+        # Insert column name
+        tk.Label(new_window, text="Column name:").pack()
+        col_name = tk.StringVar()
+        tk.Entry(new_window, textvariable=col_name, width=30).pack()
+
+        # Insert column type
+        tk.Label(new_window, text="Column type:").pack()
+        col_type = tk.StringVar()
+        options = [("integer", "INTEGER"), ("text", "TEXT"), ("real", "REAL"), ("blob", "BLOB")]
+        for text, value in options:
+            tk.Radiobutton(new_window, text=text, variable=col_type, value=value).pack()
+
+        # Confirm column addition
+        tk.Button(new_window, text="Confirm", command=new_window.destroy).pack()
+        new_window.wait_window()
+
+        column_names.append(col_name.get())
+        column_types.append(col_type.get())
+
+        # Ask if the user wants to add another column
+        add_column_window = create_new_window("Add another column?")
+        loop_var = tk.StringVar(value="no")
+        tk.Radiobutton(add_column_window, text="Yes", variable=loop_var, value="yes").pack()
+        tk.Radiobutton(add_column_window, text="No", variable=loop_var, value="no").pack()
+        tk.Button(add_column_window, text="Confirm", command=add_column_window.destroy).pack()
+        add_column_window.wait_window()
+        loop = loop_var.get() == "yes"
+    
+    # Create the table
+    DB.create_table(tab_name.get(), column_names, column_types)
+
+def delete_table_command():
+    """ Deletes a table in the database"""
+    # Prompt the name of the table
+    new_window = create_new_window("Delete table")
+    tk.Label(new_window, text="Table name:").pack()
+    tab_name = tk.StringVar()
+    options = DB.list_tables()
+    for name in options:
+        tk.Radiobutton(new_window, text=name, variable=tab_name, value=name).pack()
+
+    # Confirm table selection
+    tk.Button(new_window, text="Confirm", command=new_window.destroy).pack()
+    new_window.wait_window()
+
+    # Delete the table
+    DB.delete_table(tab_name.get())
+
+
+
+
+#############################
+##### GRAPHIC INTERFACE #####
+#############################
+
+##### OPENNING #####
+
+# window creation
+window = tk.Tk()
+window.geometry("700x1200")
+
+# database opening
+DB = DataBase()
+
+# Show interactive structure
+DB.interactive_structure(window)
+
+# Display tutorial:
+tk.Label(window, text="Welcome to the database management app!"+"\n"+
+         "This is an interactive map of the Chocolate & Cocao Value Chains"+
+          " Assessment Database. To view the data within a table, click on the name "+
+          "of the table. You will be able to edit the date from this new window."+"\n"+
+          "To enter new data from the literature, click on ADD DATA below."
+          , wraplength=680).place(x=10, y=700)
+
+tk.Button(window, text="ADD DATA", command=DB.add_data).place(x=350, y=850, anchor="center")
+
+#### MENU & COMMANDS ####
+# Don't know if this part will be useful...
+
+int = Table("Sources", DB)
+int.save()
+
+
+
+#### CLOSING ####
+
+# When closing the window, the database closes
+window.protocol("WM_DELETE_WINDOW", lambda: [DB.close(), window.destroy()])
+
+# run the loop
+
+window.mainloop()
+
+
+
+
+
+
+
